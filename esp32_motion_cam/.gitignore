@@ -1,0 +1,12 @@
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+*.bin
+*.elf
+*.map
+__pycache__/
+*.pyc
+*.img
+*.xz
+*.log
