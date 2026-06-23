@@ -20,4 +20,12 @@
 
 #define LED_PIN 35
 
+#define BAT_ADC_PIN    1
+#define BAT_DIVIDER    2.0f
+#define BAT_FULL_MV    4200
+#define BAT_EMPTY_MV   3000
+#define BAT_LOW_MV     3300
+#define BAT_CRIT_MV    3100
+#define BAT_MONITOR    0
+
 #endif

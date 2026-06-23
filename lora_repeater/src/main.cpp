@@ -12,13 +12,27 @@ uint32_t txCount = 0;
 uint32_t errCount = 0;
 unsigned long lastReport = 0;
 unsigned long lastRx = 0;
-bool txInProg = false;
+unsigned long lastBattCheck = 0;
 bool rxFlag = false;
-
-#define SerialOut Serial
+bool lowPower = false;
+int battMv = 0;
+int battPct = 0;
 
 void onRxFlag() {
   rxFlag = true;
+}
+
+int readBatteryMv() {
+  analogReadResolution(12);
+  int raw = analogRead(BAT_ADC_PIN);
+  float v = (float)raw / 4095.0f * 3.3f * BAT_DIVIDER * 1000.0f;
+  return (int)v;
+}
+
+int battToPct(int mv) {
+  if (mv >= BAT_FULL_MV) return 100;
+  if (mv <= BAT_EMPTY_MV) return 0;
+  return (int)((float)(mv - BAT_EMPTY_MV) / (float)(BAT_FULL_MV - BAT_EMPTY_MV) * 100.0f);
 }
 
 void setup() {
@@ -43,7 +57,6 @@ void setup() {
     return;
   }
   radio.setCRC(2);
-
   radio.setDio1Action(onRxFlag);
 
   state = radio.startReceive();
@@ -52,7 +65,11 @@ void setup() {
     return;
   }
 
-  Serial.printf("LoRa ready: %.1fMHz SF%d BW%.0f\n", LORA_FREQ, LORA_SF, LORA_BW);
+  battMv = readBatteryMv();
+  battPct = battToPct(battMv);
+  Serial.printf("LoRa ready: %.1fMHz SF%d BW%.0f | batt=%dmV %d%%\n",
+                LORA_FREQ, LORA_SF, LORA_BW, battMv, battPct);
+  Serial.printf("BAT_MONITOR=%d (set to 1 in config.h when battery is wired)\n", BAT_MONITOR);
   digitalWrite(LED_PIN, HIGH);
 }
 
@@ -61,9 +78,8 @@ void loop() {
     rxFlag = false;
 
     uint8_t buf[256];
-    size_t len = 0;
     int state = radio.readData(buf, 0);
-    len = radio.getPacketLength();
+    size_t len = radio.getPacketLength();
 
     if (state == RADIOLIB_ERR_NONE) {
       rxCount++;
@@ -74,7 +90,6 @@ void loop() {
       Serial.printf("[RX] len=%d rssi=%.1f snr=%.1f\n", len, rssi, snr);
 
       digitalWrite(LED_PIN, LOW);
-
       state = radio.transmit(buf, len);
       if (state == RADIOLIB_ERR_NONE) {
         txCount++;
@@ -83,7 +98,6 @@ void loop() {
         errCount++;
         Serial.printf("[TX] failed: %d\n", state);
       }
-
       digitalWrite(LED_PIN, HIGH);
 
       state = radio.startReceive();
@@ -92,7 +106,7 @@ void loop() {
       }
     } else if (state == RADIOLIB_ERR_LORA_HEADER_DAMAGED || state == RADIOLIB_ERR_SPI_CMD_TIMEOUT) {
       errCount++;
-      Serial.printf("[RX] CRC error\n");
+      Serial.printf("[RX] header/CRC error\n");
       radio.startReceive();
     } else {
       errCount++;
@@ -103,6 +117,33 @@ void loop() {
 
   if (millis() - lastReport > 30000) {
     lastReport = millis();
-    Serial.printf("[STAT] rx=%u tx=%u err=%u\n", rxCount, txCount, errCount);
+    Serial.printf("[STAT] rx=%u tx=%u err=%u bat=%dmV %d%% %s\n",
+                  rxCount, txCount, errCount, battMv, battPct,
+                  lowPower ? "LOW" : "OK");
+  }
+
+  if (millis() - lastBattCheck > 60000 && BAT_MONITOR) {
+    lastBattCheck = millis();
+    battMv = readBatteryMv();
+    battPct = battToPct(battMv);
+    Serial.printf("[BAT] %dmV %d%%\n", battMv, battPct);
+
+    if (battMv < BAT_CRIT_MV && !lowPower) {
+      lowPower = true;
+      Serial.println("[BAT] CRITICAL - entering deep sleep");
+      radio.standby();
+      digitalWrite(LED_PIN, LOW);
+      esp_sleep_enable_timer_wakeup(60ULL * 1000000ULL);
+      esp_deep_sleep_start();
+    } else if (battMv < BAT_LOW_MV && !lowPower) {
+      lowPower = true;
+      Serial.println("[BAT] LOW - reducing TX power");
+      radio.setOutputPower(10);
+    } else if (battMv > BAT_LOW_MV + 100 && lowPower) {
+      lowPower = false;
+      Serial.println("[BAT] recovered - full power");
+      radio.setOutputPower(LORA_TX_POWER);
+      radio.startReceive();
+    }
   }
 }
