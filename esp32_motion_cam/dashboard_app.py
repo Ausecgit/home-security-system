@@ -12,6 +12,7 @@ events_lock = threading.Lock()
 statuses = {}
 statuses_lock = threading.Lock()
 MAX_EVENTS = 100
+MAX_STILLS = 200
 
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
@@ -35,6 +36,13 @@ def on_mqtt_message(c, u, msg):
 
 mqtt_client.on_connect = on_mqtt_connect
 mqtt_client.on_message = on_mqtt_message
+
+def find_still_for_event(cam, frame_id):
+    prefix = f"{cam}_{frame_id}_"
+    for f in os.listdir(STILL_DIR):
+        if f.startswith(prefix):
+            return f
+    return None
 
 DASHBOARD = '''<!DOCTYPE html>
 <html lang="en">
@@ -65,65 +73,55 @@ body {
   min-height: 100vh;
   padding: 16px;
 }
-/* Header */
 .header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  margin-bottom: 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px;
 }
 .header-left { display: flex; align-items: center; gap: 14px; }
 .logo {
   width: 36px; height: 36px;
   background: linear-gradient(135deg, var(--accent), #6366f1);
-  border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; font-weight: 800; color: #fff;
+  border-radius: 8px; display: flex; align-items: center;
+  justify-content: center; font-size: 18px; font-weight: 800; color: #fff;
 }
-.header h1 {
-  font-size: 18px; font-weight: 700; letter-spacing: 0.5px;
-  color: #fff;
-}
+.header h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; color: #fff; }
 .header h1 .sub { font-size: 12px; font-weight: 400; color: var(--text-dim); display: block; }
 .header-right { display: flex; gap: 20px; align-items: center; }
-.stat-pill {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13px; color: var(--text-dim);
-}
+.stat-pill { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
 .stat-pill .val { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
-.dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  display: inline-block;
-}
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
 .dot.red { background: var(--red); box-shadow: 0 0 8px var(--red); }
 .dot.gray { background: var(--text-dim); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-/* Grid layout */
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr;
-  gap: 16px;
-  margin-bottom: 16px;
+.cam-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.cam-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px; display: flex;
+  align-items: center; gap: 12px; flex: 1; min-width: 200px;
 }
-@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+.cam-icon {
+  width: 32px; height: 32px; border-radius: 6px; background: var(--border);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.cam-info { display: flex; flex-direction: column; }
+.cam-name { font-size: 14px; font-weight: 600; color: #fff; }
+.cam-meta { font-size: 11px; color: var(--text-dim); }
+.cam-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 3px 8px; border-radius: 4px; margin-left: auto;
+}
+.tag-online { background: rgba(34,197,94,0.15); color: var(--green); }
 
-/* Panels */
 .panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden;
 }
 .panel-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
   background: var(--panel-hi);
 }
 .panel-header h2 {
@@ -132,40 +130,9 @@ body {
 }
 .panel-header .badge {
   font-size: 11px; padding: 2px 10px; border-radius: 20px;
-  background: var(--border); color: var(--text);
-  font-weight: 600;
+  background: var(--border); color: var(--text); font-weight: 600;
 }
-.panel-body { padding: 14px; }
 
-/* Camera cards */
-.cam-grid { display: flex; flex-direction: column; gap: 10px; }
-.cam-card {
-  background: var(--panel-hi);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.cam-card-left { display: flex; align-items: center; gap: 12px; }
-.cam-icon {
-  width: 32px; height: 32px; border-radius: 6px;
-  background: var(--border);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px;
-}
-.cam-info { display: flex; flex-direction: column; }
-.cam-name { font-size: 14px; font-weight: 600; color: #fff; }
-.cam-meta { font-size: 11px; color: var(--text-dim); }
-.cam-status-tag {
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.5px; padding: 3px 10px; border-radius: 4px;
-}
-.tag-online { background: rgba(34,197,94,0.15); color: var(--green); }
-.tag-offline { background: rgba(92,103,120,0.15); color: var(--text-dim); }
-
-/* Event table */
 .event-table { width: 100%; border-collapse: collapse; }
 .event-table th {
   text-align: left; padding: 8px 12px;
@@ -174,9 +141,10 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .event-table td {
-  padding: 8px 12px; font-size: 13px;
+  padding: 6px 12px; font-size: 13px;
   border-bottom: 1px solid rgba(30,39,56,0.5);
   font-variant-numeric: tabular-nums;
+  vertical-align: middle;
 }
 .event-table tr:hover { background: var(--panel-hi); }
 .event-table .time { color: var(--text-dim); }
@@ -190,34 +158,28 @@ body {
 .sev-large { background: rgba(239,68,68,0.12); color: var(--red); }
 .empty-row { text-align: center; padding: 30px; color: var(--text-dim); font-size: 13px; }
 
-/* Stills gallery */
-.stills-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
+.thumb {
+  width: 80px; height: 60px; border-radius: 4px; overflow: hidden;
+  border: 1px solid var(--border); cursor: pointer; background: var(--panel-hi);
 }
-.still-item {
-  position: relative;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  aspect-ratio: 4/3;
-  background: var(--panel-hi);
+.thumb img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.2s; }
+.thumb:hover img { transform: scale(1.1); }
+.thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 10px; }
+
+.modal {
+  display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.85); z-index: 1000;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px;
 }
-.still-item img {
-  width: 100%; height: 100%; object-fit: cover;
-  transition: transform 0.2s;
-}
-.still-item:hover img { transform: scale(1.05); }
-.still-item .still-label {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  padding: 4px 8px;
-  background: linear-gradient(transparent, rgba(0,0,0,0.8));
-  font-size: 10px; color: #fff;
-  font-variant-numeric: tabular-nums;
+.modal.show { display: flex; }
+.modal img { max-width: 90%; max-height: 80vh; border-radius: 8px; border: 1px solid var(--border); }
+.modal-info { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.modal-close {
+  position: absolute; top: 20px; right: 30px;
+  font-size: 28px; color: #fff; cursor: pointer;
 }
 
-/* Clock */
 .clock { font-size: 22px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
 .clock-date { font-size: 12px; color: var(--text-dim); text-align: right; }
 </style>
@@ -240,92 +202,85 @@ body {
   </div>
 </div>
 
-<div class="grid">
-  <!-- Camera Status Panel -->
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Cameras</h2>
-      <span class="badge">{{cam_count}} active</span>
+<div class="cam-bar">
+  {% for cam, s in statuses.items() %}
+  <div class="cam-card">
+    <div class="cam-icon">&#128247;</div>
+    <div class="cam-info">
+      <div class="cam-name">{{cam}}</div>
+      <div class="cam-meta">Frame {{s.frames}} &middot; {{s.heap}}B free</div>
     </div>
-    <div class="panel-body">
-      <div class="cam-grid">
-        {% for cam, s in statuses.items() %}
-        <div class="cam-card">
-          <div class="cam-card-left">
-            <div class="cam-icon">&#128247;</div>
-            <div class="cam-info">
-              <div class="cam-name">{{cam}}</div>
-              <div class="cam-meta">Frame {{s.frames}} &middot; {{s.heap}} bytes free</div>
-            </div>
-          </div>
-          <div class="cam-status-tag tag-online">ONLINE</div>
-        </div>
-        {% endfor %}
-        {% if not statuses %}
-        <div style="color:var(--text-dim);font-size:13px;padding:10px;">No cameras reporting</div>
-        {% endif %}
-      </div>
-    </div>
+    <div class="cam-tag tag-online">ONLINE</div>
   </div>
-
-  <!-- Event Log Panel -->
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Event Log</h2>
-      <span class="badge">{{event_count}} events</span>
-    </div>
-    <div class="panel-body" style="padding:0;">
-      <table class="event-table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Camera</th>
-            <th>Severity</th>
-            <th>Area</th>
-            <th>Position</th>
-            <th>Frame</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for e in events %}
-          <tr>
-            <td class="time">{{e.received_t}}</td>
-            <td>{{e.cam}}</td>
-            <td><span class="sev sev-{{e.class}}">{{e.class}}</span></td>
-            <td>{{"{:,}".format(e.area)}}</td>
-            <td>{{e.cx}},{{e.cy}}</td>
-            <td>{{e.frame}}</td>
-          </tr>
-          {% endfor %}
-          {% if not events %}
-          <tr><td colspan="6" class="empty-row">No motion events detected</td></tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
-  </div>
+  {% endfor %}
+  {% if not statuses %}
+  <div class="cam-card"><div class="cam-info"><div class="cam-name">No cameras</div><div class="cam-meta">Waiting for connections...</div></div></div>
+  {% endif %}
 </div>
 
-<!-- Stills Gallery -->
 <div class="panel">
   <div class="panel-header">
-    <h2>Captured Stills</h2>
-    <span class="badge">{{still_count}} stored</span>
+    <h2>Event Log</h2>
+    <span class="badge">{{event_count}} events &middot; {{still_count}} stills</span>
   </div>
-  <div class="panel-body">
-    <div class="stills-grid">
-      {% for s in stills %}
-      <div class="still-item">
-        <img src="/stills/{{s}}" loading="lazy" title="{{s}}">
-        <div class="still-label">{{s}}</div>
-      </div>
+  <table class="event-table">
+    <thead>
+      <tr>
+        <th>Thumbnail</th>
+        <th>Time</th>
+        <th>Camera</th>
+        <th>Severity</th>
+        <th>Area</th>
+        <th>Position</th>
+        <th>Frame</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td>
+          {% if e.still %}
+          <div class="thumb" onclick="openModal('{{e.still}}', '{{e.cam}} frame {{e.frame}}')">
+            <img src="/stills/{{e.still}}" loading="lazy">
+          </div>
+          {% else %}
+          <div class="thumb thumb-empty">no image</div>
+          {% endif %}
+        </td>
+        <td class="time">{{e.received_t}}</td>
+        <td>{{e.cam}}</td>
+        <td><span class="sev sev-{{e.class}}">{{e.class}}</span></td>
+        <td>{{"{:,}".format(e.area)}}</td>
+        <td>{{e.cx}},{{e.cy}}</td>
+        <td>{{e.frame}}</td>
+      </tr>
       {% endfor %}
-      {% if not stills %}
-      <div style="color:var(--text-dim);font-size:13px;padding:10px;">No stills captured</div>
+      {% if not events %}
+      <tr><td colspan="7" class="empty-row">No motion events detected</td></tr>
       {% endif %}
-    </div>
-  </div>
+    </tbody>
+  </table>
 </div>
+
+<div class="modal" id="modal" onclick="closeModal()">
+  <span class="modal-close" onclick="closeModal()">&times;</span>
+  <img id="modalImg" src="">
+  <div class="modal-info" id="modalInfo"></div>
+</div>
+
+<script>
+function openModal(src, info) {
+  document.getElementById('modalImg').src = '/stills/' + src;
+  document.getElementById('modalInfo').textContent = info;
+  document.getElementById('modal').classList.add('show');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('show');
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeModal();
+});
+</script>
 
 </body>
 </html>'''
@@ -336,16 +291,16 @@ def dashboard():
         evs = list(events)
     for e in evs:
         e["received_t"] = time.strftime("%H:%M:%S", time.localtime(e.get("received", 0)))
+        e["still"] = find_still_for_event(e.get("cam", ""), e.get("frame", 0))
     with statuses_lock:
         sts = dict(statuses)
-    stills = sorted(os.listdir(STILL_DIR), reverse=True)[:12]
     still_count = len(os.listdir(STILL_DIR))
     uptime_s = int(time.time() - START_TIME)
     h, rem = divmod(uptime_s, 3600)
     m, s = divmod(rem, 60)
     now = time.localtime()
     return render_template_string(DASHBOARD, events=evs,
-        event_count=len(evs), stills=stills, still_count=still_count,
+        event_count=len(evs), still_count=still_count,
         statuses=sts, cam_count=len(sts),
         uptime=f"{h}h {m}m {s}s",
         clock=time.strftime("%H:%M:%S", now),
@@ -363,9 +318,10 @@ def receive_still():
     path = os.path.join(STILL_DIR, fname)
     with open(path, "wb") as f:
         f.write(data)
-    old = sorted(os.listdir(STILL_DIR))
-    if len(old) > 200:
-        for f in old[:len(old)-200]:
+    files = os.listdir(STILL_DIR)
+    if len(files) > MAX_STILLS:
+        old = sorted(files, key=lambda f: os.path.getmtime(os.path.join(STILL_DIR, f)))
+        for f in old[:len(old)-MAX_STILLS]:
             try: os.remove(os.path.join(STILL_DIR, f))
             except: pass
     return jsonify({"saved": fname}), 200
